@@ -31,7 +31,8 @@ main_node:
     imu_enabled: "false"
     camera_enabled: "true"
     stereo_camera_enabled: "false"
-    lidar_enabled: "true"
+    lidar_enabled: "false"
+    odom_enabled: "false"
     sensors_topic:
       rgb_topic: "/camera_color/image_raw"
       depth_topic: "/camera_stereo/depth/image_raw" # "/camera_stereo/depth/image_raw" 

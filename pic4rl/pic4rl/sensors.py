@@ -327,12 +327,13 @@ class Sensors:
             )
             self.sensor_msg["scan"] = "None"
 
-        self.node.get_logger().debug("Odometry subscription done")
-        self.odom_sub = self.node.create_subscription(
-            Odometry, self.param["sensors_topic"]["odom_topic"], self.odometry_cb, 1
-        )
-        self.odom_process = OdomSensor()
-        self.sensor_msg["odom"] = "None"
+        if self.param["odom_enabled"] == "true":
+            self.node.get_logger().debug("Odometry subscription done")
+            self.odom_sub = self.node.create_subscription(
+                Odometry, self.param["sensors_topic"]["odom_topic"], self.odometry_cb, 1
+            )
+            self.odom_process = OdomSensor()
+            self.sensor_msg["odom"] = "None"
 
     def imu_cb(self, msg):
         self.imu_data = msg

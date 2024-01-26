@@ -133,27 +133,15 @@ class Pic4rlEnvironmentCamera(Node):
 
         self.cmd_vel_pub = self.create_publisher(Twist, "cmd_vel", qos)
 
-        self.reset_world_client = self.create_client(Empty, "reset_world")
-        self.pause_physics_client = self.create_client(Empty, "pause_physics")
-        self.unpause_physics_client = self.create_client(Empty, "unpause_physics")
-
         self.episode_step = 0
         self.previous_twist = Twist()
         self.episode = 0
         self.collision_count = 0
         self.t0 = 0.0
-        self.evaluate = False
+        self.evaluate = True
         self.index = 0
-        self.explore_demo = 15
-        
-
-        self.initial_pose, self.goals, self.poses = self.get_goals_and_poses()
-        self.goal_pose = self.goals[0]
-        self.starting_pose = self.initial_pose
 
         self.get_logger().info(f"Gym mode: {self.mode}")
-        if self.mode == "testing":
-            self.nav_metrics = Navigation_Metrics(self.logdir)
         self.get_logger().debug("PIC4RL_Environment: Starting process")
 
     def step(self, action, episode_step=0):
@@ -175,31 +163,18 @@ class Pic4rlEnvironmentCamera(Node):
 
         self.get_logger().debug("getting sensor data...")
         self.spin_sensors_callbacks()
-        (
-            lidar_measurements,
-            depth_image,
-            goal_info,
-            robot_pose,
-            collision,
-            _,
-        ) = self.get_sensor_data()
+        
+        depth_image = self.get_sensor_data()
 
         if not reset_step:
-            if self.mode == "testing":
-                self.nav_metrics.get_metrics_data(lidar_measurements, self.episode_step)
-
             self.get_logger().debug("checking events...")
-            done, event = self.check_events(
-                goal_info, robot_pose, collision
-            )
-            self.get_logger().debug("getting reward...")
-            reward = self.get_reward(
-                twist, lidar_measurements, goal_info, event
-            )
+            done, event = self.check_events()
+
+            reward = 0.
 
             self.get_logger().debug("getting observation...")
             observation = self.get_observation(
-                twist, depth_image, goal_info, robot_pose
+                twist, depth_image
             )
         else:
             reward = None
@@ -208,7 +183,7 @@ class Pic4rlEnvironmentCamera(Node):
             event = None
 
         # Send observation and reward
-        self.update_state(twist, depth_image, goal_info, robot_pose, done, event)
+        self.update_state(twist, depth_image, done, event)
         if done:
             time.sleep(1.5)
 
@@ -248,68 +223,19 @@ class Pic4rlEnvironmentCamera(Node):
     def get_sensor_data(self):
         """ """
         sensor_data = {}
-        sensor_data["scan"], collision = self.sensors.get_laser()
-        sensor_data["odom"], velocities = self.sensors.get_odom(vel=True)
         sensor_data["depth"] = self.sensors.get_depth()
 
-        if sensor_data["scan"] is None:
-            sensor_data["scan"] = (
-                np.ones(self.lidar_points) * self.lidar_distance
-            ).tolist()
-        if sensor_data["odom"] is None:
-            sensor_data["odom"] = [0.0, 0.0, 0.0]
         if sensor_data["depth"] is None:
             sensor_data["depth"] = (
                 np.ones((self.image_height, self.image_width, 1)) * self.max_depth
             )
 
         self.get_logger().debug("processing odom...")
-        goal_info, robot_pose = process_odom(self.goal_pose, sensor_data["odom"])
-        lidar_measurements = sensor_data["scan"]
         depth_image = sensor_data["depth"]
 
-        return (
-            lidar_measurements,
-            depth_image,
-            goal_info,
-            robot_pose,
-            collision,
-            velocities,
-        )
+        return depth_image
 
-    def check_events(self, goal_info, robot_pose, collision):
-        """ """
-        # FOR VINEYARD ONLY ##
-        if math.fabs(robot_pose[2]) > 1.57:
-            robot_pose[2] = math.fabs(robot_pose[2]) - 3.14
-        if math.fabs(self.starting_pose[2]) > 1.57:
-            start_yaw = math.fabs(self.starting_pose[2]) - 3.14
-        else:
-            start_yaw = self.starting_pose[2]
-
-        yaw_diff = math.fabs(robot_pose[2]-start_yaw)
-        self.get_logger().debug("Yaw difference: {}".format(yaw_diff))
-
-        if yaw_diff > 1.48: # check yaw is less than 85°
-            self.get_logger().info('Reverse: yaw too high')
-            return True, "reverse"
-
-        if collision:
-            self.collision_count += 1
-            if self.collision_count >= 3:
-                self.collision_count = 0
-                self.get_logger().info(f"Ep {'evaluate' if self.evaluate else self.episode+1}: Collision")
-                logging.info(f"Ep {'evaluate' if self.evaluate else self.episode+1}: Collision")
-                return True, "collision"
-            else:
-                return False, "None"
-
-        if goal_info[0] < self.goal_tolerance:
-            self.get_logger().info(
-                f"Ep {'evaluate' if self.evaluate else self.episode+1}: Goal"
-            )
-            logging.info(f"Ep {'evaluate' if self.evaluate else self.episode+1}: Goal")
-            return True, "goal"
+    def check_events(self,):
 
         if self.episode_step + 1 >= self.timeout_steps:
             self.get_logger().info(
@@ -322,34 +248,8 @@ class Pic4rlEnvironmentCamera(Node):
 
         return False, "None"
 
-    def get_reward(self, twist, lidar_measurements, goal_info, event):
-        """ """
-        yaw_reward = (1 - 3*math.sqrt(math.fabs(goal_info[1] / math.pi))) * 0.3
-        distance_reward = (self.previous_goal_info[0] - goal_info[0]) * 5
-        v = twist.linear.x
-        w = twist.angular.z
-        speed_reward = (v - 0.25 - 0.5*math.fabs(w))
 
-        reward = yaw_reward + distance_reward + speed_reward
-
-        if event == "goal":
-            reward = 300
-        elif event == "collision":
-            # reward = -1000*math.fabs(v)**2
-            #print("lidar min measure ", np.min(lidar_measurements))
-            reward = -150
-        elif event == "reverse":
-            reward = -200
-        else:
-            reward += -0.1
-
-        # print("yaw reward: ", yaw_reward)
-        # print("speed reward: ", speed_reward)
-        # print("distance_reward: ", distance_reward)
-        # print("reward_tot ", reward)
-        return reward
-
-    def get_observation(self, twist, depth_image, goal_info, robot_pose):
+    def get_observation(self, twist, depth_image):
         """ """
         # flattened depth image
         if self.visual_data == "features":
@@ -362,20 +262,13 @@ class Pic4rlEnvironmentCamera(Node):
         state = np.concatenate((vel, features))
         return state
 
-    def update_state(self, twist, depth_image, goal_info, robot_pose, done, event):
+    def update_state(self, twist, depth_image, done, event):
         """ """
         self.previous_twist = twist
         self.previous_depth_image = depth_image
-        self.previous_goal_info = goal_info
-        self.previous_robot_pose = robot_pose
 
     def reset(self, n_episode, tot_steps, evaluate=False):
         """ """
-        if self.mode == "testing":
-            self.nav_metrics.calc_metrics(n_episode, self.initial_pose, self.goal_pose)
-            self.nav_metrics.log_metrics_results(n_episode)
-            self.nav_metrics.save_metrics_results(n_episode)
-
         self.episode = n_episode
         self.evaluate = evaluate
         logging.info(
@@ -385,115 +278,10 @@ class Pic4rlEnvironmentCamera(Node):
         self.get_logger().info("Initializing new episode ...")
         logging.info("Initializing new episode ...")
 
-        self.get_logger().debug("pausing...")
-        self.pause()
-
-        self.new_episode()
-
-        self.get_logger().debug("unpausing...")
-        self.unpause()
         self.get_logger().debug("Performing null step to reset variables")
         self.episode_step = 0
 
         ( _, _, _) = self._step(reset_step=True)
         (observation, _, _) = self._step()
 
-        if (self.episode < 50 or (self.episode % self.explore_demo == 0.)) and not self.evaluate:
-           exploration_ep = True
-           self.get_logger().info("Pseudo-Demonstrative exploration episode ...")
-        else:
-            exploration_ep = False
-
-        return observation, exploration_ep
-
-    def new_episode(self):
-        """ """
-
-        # self.get_logger().debug("Resetting simulation ...")
-        # req = Empty.Request()
-
-        # while not self.reset_world_client.wait_for_service(timeout_sec=1.0):
-        #     self.get_logger().warn('service not available, waiting again...')
-        # self.reset_world_client.call_async(req)
-
-        if self.episode % self.change_episode == 0.0 or self.evaluate:
-            self.index = int(np.random.uniform() * len(self.poses)) - 1
-
-        self.get_logger().debug("Respawing robot ...")
-        self.respawn_robot(self.index)
-
-        self.get_logger().debug("Respawing goal ...")
-        self.respawn_goal(self.index)
-
-        time.sleep(1.0)
-        self.get_logger().debug("Environment reset performed ...")
-
-    def respawn_goal(self, index):
-        """ """
-        self.get_goal(index)
-
-        self.get_logger().info(
-            f"Ep {'evaluate' if self.evaluate else self.episode+1} goal pose [x, y]: {self.goal_pose}"
-        )
-        logging.info(
-            f"Ep {'evaluate' if self.evaluate else self.episode+1} goal pose [x, y]: {self.goal_pose}"
-        )
-
-        # position = "{x: "+str(self.goal_pose[0])+",y: "+str(self.goal_pose[1])+",z: "+str(0.01)+"}"
-        # pose = "'{state: {name: 'goal',pose: {position: "+position+"}}}'"
-        # subprocess.run(
-        #     "ros2 service call /test/set_entity_state gazebo_msgs/srv/SetEntityState "+pose,
-        #     shell=True,
-        #     stdout=subprocess.DEVNULL
-        #     )
-        # time.sleep(0.25)
-
-    def get_goal(self, index):
-        """ """
-        self.goal_pose = self.goals[index]
-
-    def respawn_robot(self, index):
-        """ """
-        if self.episode < self.starting_episodes:
-            x, y, yaw = tuple(self.initial_pose)
-        else:
-            x, y, yaw = tuple(self.poses[index])
-
-        self.starting_pose = [x,y,yaw]
-        qz = np.sin(yaw / 2)
-        qw = np.cos(yaw / 2)
-
-        self.get_logger().info(
-            f"Ep {'evaluate' if self.evaluate else self.episode+1} robot pose [x,y,yaw]: {[x, y, yaw]}"
-        )
-        logging.info(
-            f"Ep {'evaluate' if self.evaluate else self.episode+1} robot pose [x,y,yaw]: {[x, y, yaw]}"
-        )
-
-        position = "position: {x: " + str(x) + ",y: " + str(y) + ",z: " + str(0.065) + "}"
-        orientation = "orientation: {z: " + str(qz) + ",w: " + str(qw) + "}"
-        pose = position + ", " + orientation
-        state = "'{state: {name: '" + self.robot_name + "',pose: {" + pose + "}}}'"
-        subprocess.run(
-            "ros2 service call /test/set_entity_state gazebo_msgs/srv/SetEntityState "
-            + state,
-            shell=True,
-            stdout=subprocess.DEVNULL,
-        )
-        time.sleep(1.0)
-
-    def pause(self):
-        """ """
-        req = Empty.Request()
-        while not self.pause_physics_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().warn("service not available, waiting again...")
-        future = self.pause_physics_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future)
-
-    def unpause(self):
-        """ """
-        req = Empty.Request()
-        while not self.unpause_physics_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().warn("service not available, waiting again...")
-        future = self.unpause_physics_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future)
+        return observation

@@ -105,6 +105,7 @@ class Tester:
             self._checkpoint, directory=self._output_dir, max_to_keep=5)
 
         if model_dir is not None:
+            self.logger.info("Model directory path {}".format(model_dir))
             assert os.path.isdir(model_dir)
             self._latest_path_ckpt = tf.train.latest_checkpoint(model_dir)
             self._checkpoint.restore(self._latest_path_ckpt)
@@ -125,23 +126,29 @@ class Tester:
             self.logger.error("Please specify model directory by passing command line argument `--model-dir`")
             exit(-1)
 
-        self.evaluate_policy(total_steps=0)
+        n_episode = 0
+        total_steps = 0
+        ep_steps = 0
+
+        latest_path_ckpt = tf.train.latest_checkpoint(self._model_dir)
+        if self._latest_path_ckpt != latest_path_ckpt:
+            self._latest_path_ckpt = latest_path_ckpt
+            self._checkpoint.restore(self._latest_path_ckpt)
+            self.logger.info("Restored {}".format(self._latest_path_ckpt))
+
         while True:
-            latest_path_ckpt = tf.train.latest_checkpoint(self._model_dir)
-            if self._latest_path_ckpt != latest_path_ckpt:
-                self._latest_path_ckpt = latest_path_ckpt
-                self._checkpoint.restore(self._latest_path_ckpt)
-                self.logger.info("Restored {}".format(self._latest_path_ckpt))
+            _, ep_steps, _ = self.evaluate_policy(total_steps, n_episode)
+            total_steps += int(ep_steps)
+            n_episode += 1
 
-            self.evaluate_policy(total_steps=0)
-
-    def evaluate_policy(self, total_steps):
+    def evaluate_policy(self, total_steps, n_episode):
         tf.summary.experimental.set_step(total_steps)
         if self._normalize_obs:
             self._test_env.normalizer.set_params(
                 *self._env.normalizer.get_params())
         avg_test_return = 0.
         avg_test_steps = 0
+        avg_fps = 0.
         if self._save_test_path:
             replay_buffer = get_replay_buffer(
                 self._policy, self._test_env, size=self._episode_max_steps)
@@ -149,8 +156,10 @@ class Tester:
         for i in range(self._test_episodes):
             episode_return = 0.
             frames = []
-            obs = self._test_env.reset(i)
+            obs = self._test_env.reset(n_episode, total_steps, evaluate=True)
             avg_test_steps += 1
+            episode_start_time = time.perf_counter()
+
             for episode_step in range(self._episode_max_steps):
                 action = self._policy.get_action(obs, test=True)
                 next_obs, reward, done, _ = self._test_env.step(action, episode_step)
@@ -163,9 +172,11 @@ class Tester:
                     frames.append(self._test_env.render(mode='rgb_array'))
                 elif self._show_test_progress:
                     self._test_env.render()
+
                 episode_return += reward
                 obs = next_obs
                 if done:
+                    fps = episode_step / (time.perf_counter() - episode_start_time)
                     break
             prefix = "step_{0:08d}_epi_{1:02d}_return_{2:010.4f}".format(
                 total_steps, i, episode_return)
@@ -176,12 +187,13 @@ class Tester:
             if self._save_test_movie:
                 frames_to_gif(frames, prefix, self._output_dir)
             avg_test_return += episode_return
+            avg_fps += fps
         if self._show_test_images:
             images = tf.cast(
                 tf.expand_dims(np.array(obs).transpose(2, 0, 1), axis=3),
                 tf.uint8)
             tf.summary.image('train/input_img', images,)
-        return avg_test_return / self._test_episodes, avg_test_steps / self._test_episodes
+        return avg_test_return / self._test_episodes, avg_test_steps / self._test_episodes, avg_fps / self._test_episodes
 
     def _set_from_args(self, args):
         # experiment settings

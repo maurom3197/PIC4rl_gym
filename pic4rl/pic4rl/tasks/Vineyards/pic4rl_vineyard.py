@@ -29,9 +29,7 @@ from tf2rl.algos.ddpg import DDPG
 from tf2rl.algos.td3 import TD3
 from tf2rl.algos.sac import SAC
 from tf2rl.algos.sac_ae import SACAE
-from tf2rl.algos.ppo import PPO
-from tf2rl.experiments.trainer_explore import Trainer
-from tf2rl.experiments.on_policy_trainer import OnPolicyTrainer
+from tf2rl.experiments.tester import Tester
 from pic4rl.tasks.Vineyards.pic4rl_environment_camera_depth import (
     Pic4rlEnvironmentCamera,
 )
@@ -63,7 +61,7 @@ class Pic4rlVineyards(Pic4rlEnvironmentCamera):
 
         else:
             self.set_parser_list(train_params)
-            self.trainer = self.instantiate_agent()
+            self.tester = self.instantiate_agent()
 
     def instantiate_agent(self):
         """
@@ -130,9 +128,9 @@ class Pic4rlVineyards(Pic4rlEnvironmentCamera):
 
         self.print_log()
 
-        # OFF-POLICY ALGORITHM TRAINER
-        if self.policy_trainer == "off-policy":
-            parser = Trainer.get_argument()
+        # OFF-POLICY ALGORITHM tester
+        if self.policy_tester == "off-policy":
+            parser = Tester.get_argument()
 
             if self.train_policy == "DDPG":
                 self.get_logger().debug("Parsing DDPG parameters...")
@@ -264,45 +262,12 @@ class Pic4rlVineyards(Pic4rlEnvironmentCamera):
                 )
                 self.get_logger().info("Instantiate SAC-AE agent...")
             
-            trainer = Trainer(policy, self, args, test_env=None)
+            tester = Tester(policy, self, args, test_env=None)
             # self.get_logger().info('Starting process...')
             # trainer()
 
-        # ON-POLICY ALGORITHM TRAINER
-        if self.policy_trainer == "on-policy":
-            parser = OnPolicyTrainer.get_argument()
 
-            if self.train_policy == "PPO":
-                self.get_logger().debug("Parsing PPO parameters...")
-                parser = PPO.get_argument(parser)
-                args = parser.parse_args(self.parser_list)
-                policy = PPO(
-                    state_shape=self.observation_space.shape,
-                    action_dim=self.action_space.high.size,
-                    is_discrete=False,
-                    max_action=self.action_space.high,
-                    lr_actor=1e-3,
-                    lr_critic=3e-3,
-                    actor_units=(256, 256),
-                    critic_units=(256, 256),
-                    hidden_activation_actor="relu",
-                    hidden_activation_critic="relu",
-                    clip=True,
-                    clip_ratio=0.2,
-                    horizon=self.horizon,
-                    enable_gae=self.enable_gae,
-                    normalize_adv=self.normalize_adv,
-                    gpu=self.gpu,
-                    batch_size=self.batch_size,
-                    log_level=self.log_level,
-                )
-                self.get_logger().info("Instantiate PPO agent...")
-
-            trainer = OnPolicyTrainer(policy, self, args, test_env=None)
-            # self.get_logger().info('Starting process...')
-            # trainer()
-
-        return trainer
+        return tester
 
     def set_parser_list(self, params):
         """ """
@@ -324,10 +289,10 @@ class Pic4rlVineyards(Pic4rlEnvironmentCamera):
 
     def threadFunc(self):
         try:
-            self.trainer()
+            self.tester()
         except Exception:
             self.get_logger().error(
-                f"Error in starting trainer:\n {traceback.format_exc()}"
+                f"Error in starting tester:\n {traceback.format_exc()}"
             )
             return
 
@@ -402,31 +367,15 @@ class Pic4rlVineyards(Pic4rlEnvironmentCamera):
         self.declare_parameters(
             namespace="",
             parameters=[
-                # ("policy", train_params["--policy"]),
-                # ("policy_trainer", train_params["--policy_trainer"]),
                 ("max_lin_vel", rclpy.Parameter.Type.DOUBLE),
                 ("min_lin_vel", rclpy.Parameter.Type.DOUBLE),
                 ("max_ang_vel", rclpy.Parameter.Type.DOUBLE),
-                ("min_ang_vel", rclpy.Parameter.Type.DOUBLE),
-                # ("sensor", rclpy.Parameter.Type.STRING),
-                # ("visual_data", None),
-                # ("features", None),
-                # ("gpu", train_params["--gpu"]),
-                # ("batch_size", train_params["--batch-size"]),
-                # ("n_warmup", train_params["--n-warmup"]),
-                # ("tflite_flag", train_params["--tflite_flag"]),
-                # ("tflite_model_path", train_params["--tflite_model_path"]),
+                ("min_ang_vel", rclpy.Parameter.Type.DOUBLE)
             ],
         )
 
-        # self.train_policy = (
-        #     self.get_parameter("policy").get_parameter_value().string_value
-        # )
         self.train_policy = train_params["--policy"]
-        # self.policy_trainer = (
-        #     self.get_parameter("policy_trainer").get_parameter_value().string_value
-        # )
-        self.policy_trainer = train_params["--policy_trainer"]
+        self.policy_tester = train_params["--policy_trainer"]
         self.min_ang_vel = (
             self.get_parameter("min_ang_vel").get_parameter_value().double_value
         )
@@ -448,23 +397,11 @@ class Pic4rlVineyards(Pic4rlEnvironmentCamera):
         self.features = (
             self.get_parameter("features").get_parameter_value().integer_value
         )
-        # self.gpu = self.get_parameter("gpu").get_parameter_value().integer_value
         self.gpu = train_params["--gpu"]
-        # self.batch_size = (
-        #     self.get_parameter("batch_size").get_parameter_value().integer_value
-        # )
+
         self.batch_size = train_params["--batch-size"]
-        # self.n_warmup = (
-        #     self.get_parameter("n_warmup").get_parameter_value().integer_value
-        # )
         self.n_warmup = train_params["--n-warmup"]
-        # self.tflite_flag = (
-        #     self.get_parameter("tflite_flag").get_parameter_value().bool_value
-        # )
         self.tflite_flag = train_params["--tflite_flag"]
-        # self.tflite_model_path = (
-        #     self.get_parameter("tflite_model_path").get_parameter_value().string_value
-        # )
         self.tflite_model_path = train_params["--tflite_model_path"]
 
         if self.train_policy == "PPO":
