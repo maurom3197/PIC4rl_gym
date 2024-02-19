@@ -140,15 +140,26 @@ class Pic4rlEnvironmentCamera(Node):
         self.t0 = 0.0
         self.evaluate = True
         self.index = 0
+        self.smooth_vel = True
+        self.previous_ema = np.zeros(2)
+        self.alpha = 0.3
+        self.max_lin_acc = 1.5
+        self.max_ang_acc = 3.0
+        self.dt = 1/self.update_freq
+        self.min_delta_vel = [-self.max_lin_acc*self.dt, -self.max_ang_acc*self.dt]
+        self.max_delta_vel = [self.max_lin_acc*self.dt, self.max_ang_acc*self.dt]
 
         self.get_logger().info(f"Gym mode: {self.mode}")
         self.get_logger().debug("PIC4RL_Environment: Starting process")
 
     def step(self, action, episode_step=0):
         """ """
-        twist = Twist()
-        twist.linear.x = float(action[0])
-        twist.angular.z = float(action[1])
+        if self.smooth_vel:
+            twist = self.velocity_smoother(action)
+        else:
+            twist = Twist()
+            twist.linear.x = float(action[0])
+            twist.angular.z = float(action[1])
         self.episode_step = episode_step
 
         observation, reward, done = self._step(twist)
@@ -219,6 +230,26 @@ class Pic4rlEnvironmentCamera(Node):
 
         # self.get_logger().debug("pausing...")
         # self.pause()
+
+    def velocity_smoother(self, action):
+        """ """
+        prev_action = np.array([self.previous_twist.linear.x, self.previous_twist.angular.z])
+        # acceleration contraints on velocity
+        max_vel = prev_action + self.max_delta_vel
+        min_vel = prev_action + self.min_delta_vel
+        action = np.clip(action, min_vel, max_vel)
+        self.get_logger().debug(f"previous_ema: {self.previous_ema}")
+        self.get_logger().debug(f"action: {action}")
+        # ema filter
+        if self.t0 > 0.0:
+            self.get_logger().debug("EMA FILTER...")
+            action = self.alpha*action + (1. - self.alpha)*self.previous_ema
+        self.previous_ema = action
+
+        twist = Twist()
+        twist.linear.x = float(action[0])
+        twist.angular.z = float(action[1])
+        return twist
 
     def get_sensor_data(self):
         """ """
