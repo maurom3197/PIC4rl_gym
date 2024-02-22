@@ -1,0 +1,1 @@
+/root/gym_ws/install/pic4rl/lib/pic4rl/vineyards_camera --ros-args -r __node:=pic4rl_starter --params-file /tmp/launch_params__rwm4sa9 --params-file /tmp/launch_params_tqa_ciwq --params-file /tmp/launch_params__xehs4vz --params-file /tmp/launch_params_xyf9qbmy
